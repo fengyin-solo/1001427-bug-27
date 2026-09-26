@@ -19,15 +19,30 @@ STATUSES = ["待移交", "正常养护", "重点观测", "封闭施工"]
 @router.get("", response_model=PageResult[dict])
 def list_entries(
     keyword: str | None = Query(default=None, description="按设施编码检索"),
+    name: str | None = Query(default=None, description="按道路名称检索"),
+    level: str | None = Query(default=None, description="按道路等级检索"),
     status: str | None = Query(default=None, description="待移交、正常养护、重点观测、封闭施工"),
     page: int = 1,
     size: int = 20,
 ) -> PageResult[dict]:
-    """按设施编码与状态过滤道路设施列表；没有数据时返回空页，不报错。"""
+    """按设施编码、道路名称、道路等级与状态过滤道路设施列表；没有数据时返回空页，不报错。"""
     if size > 200:
         raise HTTPException(status_code=400, detail="每页最多 200 条，请缩小分页范围")
-    items, total = service.list_entries(keyword=keyword, status=status, page=page, size=size)
+    items, total = service.list_entries(keyword=keyword, name=name, level=level, status=status, page=page, size=size)
     return PageResult(items=items, total=total, page=page, size=size)
+
+
+@router.get("/stats")
+def stats() -> dict[str, Any]:
+    """统计概要：在养、重点观测与在册总量；动作办完后前端会重新拉取。"""
+    return {"module": "road", "cards": service.stats()}
+
+
+@router.get("/export")
+def export_entries() -> dict[str, Any]:
+    """导出道路设施清单：返回当前过滤条件下的全量数据。"""
+    items, total = service.list_entries(page=1, size=10000)
+    return {"module": "road", "total": total, "items": items}
 
 
 @router.get("/{entry_id}", response_model=dict)
@@ -41,11 +56,11 @@ def get_entry(entry_id: int) -> dict:
 
 @router.post("", response_model=ActionResult)
 def create_entry(payload: EntryPayload) -> ActionResult:
-    """登记一条道路设施，缺字段时说明原因而不是静默丢弃。"""
-    entry, missing = service.create_entry(payload.values)
-    if missing:
-        return ActionResult(ok=False, message=f"缺少必填字段：{'、'.join(missing)}")
-    return ActionResult(ok=True, message="道路设施已登记", entry=entry)
+    """登记一条道路设施；缺字段或同一设施重复提交时说明原因，不会静默生成第二条记录。"""
+    entry, message = service.create_entry(payload.values)
+    if entry is None:
+        return ActionResult(ok=False, message=message)
+    return ActionResult(ok=True, message=message, entry=entry)
 
 
 @router.post("/{entry_id}/actions", response_model=ActionResult)
@@ -56,10 +71,3 @@ def run_action(entry_id: int, payload: EntryPayload) -> ActionResult:
     if entry is None:
         return ActionResult(ok=False, message=message)
     return ActionResult(ok=True, message=message, entry=entry)
-
-
-@router.get("/export")
-def export_entries() -> dict[str, Any]:
-    """导出道路设施清单：返回当前过滤条件下的全量数据。"""
-    items, total = service.list_entries(page=1, size=10000)
-    return {"module": "road", "total": total, "items": items}
